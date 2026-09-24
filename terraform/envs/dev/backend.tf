@@ -17,7 +17,7 @@ terraform {
   #   gsutil mb -l <region> gs://<project_id>-tfstate
   #   gsutil versioning set on gs://<project_id>-tfstate
   backend "gcs" {
-    bucket = "REPLACE_WITH_YOUR_TFSTATE_BUCKET"
+    bucket = "project-17f209b3-7dc2-4fda-bef-tfstate"
     prefix = "devpulse/dev"
   }
 }
