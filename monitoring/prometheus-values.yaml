@@ -1,0 +1,32 @@
+# helm values for prometheus-community/kube-prometheus-stack
+grafana:
+  adminPassword: "REPLACE_ME_use_a_secret_in_real_use"
+  service:
+    type: ClusterIP
+  persistence:
+    enabled: true
+    size: 5Gi
+
+prometheus:
+  prometheusSpec:
+    retention: 15d
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: 500m
+        memory: 1Gi
+    serviceMonitorSelectorNilUsesHelmValues: false
+
+alertmanager:
+  config:
+    route:
+      receiver: "slack-notifications"
+      group_by: ["alertname", "namespace"]
+    receivers:
+      - name: "slack-notifications"
+        slack_configs:
+          - api_url: "REPLACE_WITH_SLACK_WEBHOOK_SECRET_REF"
+            channel: "#devpulse-alerts"
+            send_resolved: true

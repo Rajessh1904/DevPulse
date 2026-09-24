@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: devpulse
+  labels:
+    app: devpulse
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: devpulse
+  template:
+    metadata:
+      labels:
+        app: devpulse
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: devpulse
+          image: REGION-docker.pkg.dev/PROJECT_ID/devpulse-images/devpulse:IMAGE_TAG
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: db-credentials
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: devpulse
+  labels:
+    app: devpulse
+spec:
+  selector:
+    app: devpulse
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
