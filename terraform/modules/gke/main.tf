@@ -18,6 +18,13 @@ resource "google_container_cluster" "primary" {
     master_ipv4_cidr_block  = "172.16.0.0/28"
   }
 
+  master_authorized_networks_config {
+  cidr_blocks {
+    cidr_block   = "0.0.0.0/0"
+    display_name = "All networks"
+  }
+}
+
   release_channel {
     channel = "REGULAR"
   }

@@ -11,6 +11,8 @@ resource "google_sql_database_instance" "postgres" {
     ip_configuration {
       ipv4_enabled    = false
       private_network = var.network_id
+      ssl_mode        = "ENCRYPTED_ONLY"
+
     }
 
     backup_configuration {
