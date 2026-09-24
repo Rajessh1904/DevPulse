@@ -20,6 +20,7 @@ result in Postgres, and updates Prometheus gauges/counters.
 import os
 import time
 import threading
+from contextlib import asynccontextmanager
 
 import psycopg2
 import requests
@@ -29,14 +30,15 @@ from fastapi import FastAPI, HTTPException
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, generate_latest
 from psycopg2.extras import RealDictCursor
 from pydantic import BaseModel, HttpUrl
-
-app = FastAPI(title="DevPulse", description="Self-hosted uptime monitoring API")
+from starlette.responses import Response
 
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_NAME = os.getenv("DB_NAME", "devpulse")
 DB_USER = os.getenv("DB_USER", "devpulse")
 DB_PASS = os.getenv("DB_PASS", "changeme")
 CHECK_INTERVAL_SECONDS = int(os.getenv("CHECK_INTERVAL_SECONDS", "30"))
+DB_CONNECT_RETRIES = int(os.getenv("DB_CONNECT_RETRIES", "10"))
+DB_CONNECT_RETRY_DELAY_SECONDS = float(os.getenv("DB_CONNECT_RETRY_DELAY_SECONDS", "2"))
 
 # --- Prometheus metrics -----------------------------------------------------
 CHECKS_TOTAL = Counter("devpulse_checks_total", "Total health checks performed", ["target"])
@@ -45,6 +47,7 @@ TARGET_UP = Gauge("devpulse_target_up", "1 if target responded with < 400 status
 TARGET_LATENCY_SECONDS = Gauge("devpulse_target_latency_seconds", "Last observed response latency", ["target"])
 
 _db_lock = threading.Lock()
+scheduler = BackgroundScheduler()
 
 
 def get_conn():
@@ -54,9 +57,26 @@ def get_conn():
     )
 
 
-class Target(BaseModel):
-    url: HttpUrl
-    name: str
+def wait_for_db():
+    """
+    Retries the DB connection on startup instead of crashing immediately.
+    In docker-compose, Postgres accepting TCP connections can lag a couple
+    of seconds behind the container reporting "started" -- without this,
+    the app container can crash-loop once before settling, which is a
+    confusing first impression in a live demo.
+    """
+    last_error = None
+    for attempt in range(1, DB_CONNECT_RETRIES + 1):
+        try:
+            conn = get_conn()
+            conn.close()
+            return
+        except psycopg2.OperationalError as exc:
+            last_error = exc
+            time.sleep(DB_CONNECT_RETRY_DELAY_SECONDS)
+    raise RuntimeError(
+        f"Could not reach Postgres at {DB_HOST} after {DB_CONNECT_RETRIES} attempts"
+    ) from last_error
 
 
 def run_checks():
@@ -98,18 +118,35 @@ def run_checks():
             conn.close()
 
 
-scheduler = BackgroundScheduler()
-
-
-@app.on_event("startup")
-def start_scheduler():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    wait_for_db()
     scheduler.add_job(run_checks, "interval", seconds=CHECK_INTERVAL_SECONDS, id="run_checks")
     scheduler.start()
-
-
-@app.on_event("shutdown")
-def stop_scheduler():
+    yield
+    # Shutdown
     scheduler.shutdown(wait=False)
+
+
+app = FastAPI(title="DevPulse", description="Self-hosted uptime monitoring API", lifespan=lifespan)
+
+@app.get("/")
+def root():
+    # Bare "/" has no natural meaning for an API-only service -- without
+    # this, hitting the base URL in a browser (the first thing anyone does
+    # in a demo) shows an unhelpful bare 404 instead of pointing anywhere
+    # useful.
+    return {
+        "service": "DevPulse",
+        "docs": "/docs",
+        "endpoints": ["/targets", "/healthz", "/readyz", "/metrics"],
+    }
+
+
+class Target(BaseModel):
+    url: HttpUrl
+    name: str
 
 
 @app.get("/healthz")
@@ -129,7 +166,6 @@ def readyz():
 
 @app.get("/metrics")
 def metrics():
-    from starlette.responses import Response
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 

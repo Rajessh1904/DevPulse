@@ -9,6 +9,11 @@ services:
       - ./app/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devpulse -d devpulse"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   devpulse:
     build: ./app
@@ -19,6 +24,7 @@ services:
       DB_PASS: changeme
       CHECK_INTERVAL_SECONDS: "30"
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     ports:
       - "8000:8000"

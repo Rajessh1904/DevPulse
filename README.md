@@ -12,12 +12,6 @@ GKE → GitHub Actions with keyless OIDC auth → Prometheus/Grafana. It eats
 its own dog food: the tool that watches your other services is deployed,
 monitored, and secured the same way they are.
 
-This makes it a good single-repo demo, because unlike a throwaway CRUD app,
-explaining *why* it's built this way ("we needed to know when our staging
-environment went down, so we built this, and then it needed the same rigor
-as anything else in prod") is a real, defensible engineering story — useful
-for a portfolio or an interview walkthrough.
-
 ## What it actually does
 
 - `POST /targets` — register a URL to watch, with a friendly name
@@ -29,14 +23,13 @@ for a portfolio or an interview walkthrough.
   `devpulse_check_failures_total`
 - `GET /healthz` / `GET /readyz` — Kubernetes probes
 
-## Architecture (see diagram above)
+## Architecture
 
 **CI (build-time):** GitHub → GitHub Actions, authenticating to GCP via
 **Workload Identity Federation** (OIDC — no downloaded service-account key,
 ever) → lint → **SAST** (CodeQL) → **SCA** (`pip-audit`) → **secrets scan**
-(gitleaks) → **IaC scan** (`trivy config`, since tfsec is retired) → Docker
-build → **image scan** (Trivy) → push to Artifact Registry. Any HIGH/CRITICAL
-finding fails the build before anything reaches the cluster.
+(gitleaks) → **IaC scan** (`trivy config`) → Docker build → **image scan**
+(Trivy) → push to Artifact Registry.
 
 **IaC:** Terraform, GCS backend with state locking, modules for VPC
 (private subnet + Cloud NAT), GKE Autopilot, Artifact Registry, Cloud SQL
@@ -55,8 +48,8 @@ for TLS, DB credentials from Secret Manager.
 **Observability:** `kube-prometheus-stack` (Prometheus + Grafana +
 Alertmanager) via Helm. A `ServiceMonitor` scrapes DevPulse's own `/metrics`
 endpoint every 30s. Alerts fire on: the DevPulse pod itself crash-looping,
-*or* one of DevPulse's own watched targets going down for 5+ minutes, *or*
-the HPA sitting maxed out for 10+ minutes.
+one of DevPulse's own watched targets going down for 5+ minutes, or the HPA
+sitting maxed out for 10+ minutes.
 
 ## Repo layout
 
@@ -77,41 +70,74 @@ devpulse/
 
 ---
 
+## Fixes made for smooth, reliable demo execution
+
+These were found and corrected specifically so a live run doesn't stumble:
+
+| Issue | Fix |
+|---|---|
+| `psycopg2-binary==2.9.9` predates Python 3.14 support (added in `2.9.11`) — no prebuilt wheel exists for 3.14, so `pip install` inside the Docker build would try to compile from source and fail without build tools present. | Bumped to `psycopg2-binary==2.9.12`, which ships a Python 3.14 wheel. |
+| `@app.on_event("startup"/"shutdown")` is FastAPI's deprecated event-hook style — it still works but throws deprecation noise and is being phased out. | Rewrote `main.py` to use the modern `lifespan` context manager. |
+| In `docker-compose`, Postgres reports "started" a couple of seconds before it actually accepts connections — the app container could crash on its very first boot before settling on retry. | Added a `pg_isready` healthcheck to the `db` service and `condition: service_healthy` on `devpulse`, plus a `wait_for_db()` retry loop in the app itself as a second layer of defense. |
+
+## Prerequisites (Windows / PowerShell)
+
+- Docker Desktop (with the WSL2 backend enabled)
+- `gcloud`, `terraform` (>=1.9), `kubectl`, `kustomize`, `helm` — install via
+  their official Windows installers, or `winget`/`choco`/`scoop`, and confirm
+  each is on your `PATH`:
+  ```powershell
+  gcloud --version
+  terraform --version
+  kubectl version --client
+  helm version
+  ```
+- Python 3.14 (only needed locally if you want to run `main.py` outside
+  Docker — the container build doesn't need it on your machine)
+- A GCP project with billing enabled, and a GitHub repo you own with this
+  code pushed to it
+
+All commands below are native PowerShell — no WSL or Git Bash required.
+`gcloud`, `terraform`, `kubectl`, and `helm` are plain executables and behave
+identically in PowerShell.
+
+---
+
 ## Step-by-step execution
 
-### Step 0 — Prerequisites
-- A GCP project with billing enabled
-- `gcloud`, `terraform` (>=1.9), `kubectl`, `kustomize`, `docker`,
-  `docker compose`, Python 3.14 installed locally
-- A GitHub repo you own, this code pushed to it
-
 ### Step 1 — Run it locally first
-```bash
+```powershell
 docker compose up --build
-curl -X POST localhost:8000/targets -H "Content-Type: application/json" \
-  -d '{"name": "google", "url": "https://google.com"}'
-curl localhost:8000/targets
-curl localhost:8000/metrics
 ```
-Confirm a target shows `is_up: true` after ~30s. This proves the app works
-before any cloud infra enters the picture.
+In a second PowerShell window:
+```powershell
+Invoke-RestMethod -Uri http://localhost:8000/targets -Method Post `
+  -ContentType "application/json" `
+  -Body '{"name": "google", "url": "https://google.com"}'
+
+Invoke-RestMethod -Uri http://localhost:8000/targets
+Invoke-RestMethod -Uri http://localhost:8000/metrics
+```
+Confirm a target shows `is_up: True` after ~30 seconds. This proves the app
+works before any cloud infra enters the picture.
 
 ### Step 2 — Enable required GCP APIs
-```bash
+```powershell
 gcloud config set project YOUR_PROJECT_ID
-gcloud services enable \
-  container.googleapis.com \
-  sqladmin.googleapis.com \
-  artifactregistry.googleapis.com \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  servicenetworking.googleapis.com \
-  secretmanager.googleapis.com \
+gcloud services enable `
+  container.googleapis.com `
+  sqladmin.googleapis.com `
+  artifactregistry.googleapis.com `
+  iam.googleapis.com `
+  iamcredentials.googleapis.com `
+  servicenetworking.googleapis.com `
+  secretmanager.googleapis.com `
   cloudresourcemanager.googleapis.com
 ```
+(The backtick `` ` `` is PowerShell's line-continuation character — equivalent to `\` in bash.)
 
 ### Step 3 — Create the Terraform state bucket (once, manually)
-```bash
+```powershell
 gsutil mb -l us-central1 gs://YOUR_PROJECT_ID-tfstate
 gsutil versioning set on gs://YOUR_PROJECT_ID-tfstate
 ```
@@ -119,14 +145,14 @@ Edit `terraform/envs/dev/backend.tf` and replace
 `REPLACE_WITH_YOUR_TFSTATE_BUCKET` with that bucket name.
 
 ### Step 4 — Configure Terraform variables
-```bash
+```powershell
 cd terraform/envs/dev
-cp terraform.tfvars.example terraform.tfvars
-# edit: project_id, region, github_repo (e.g. your-org/devpulse)
+Copy-Item terraform.tfvars.example terraform.tfvars
+notepad terraform.tfvars   # set project_id, region, github_repo
 ```
 
 ### Step 5 — Provision infrastructure
-```bash
+```powershell
 terraform init
 terraform plan -out=tfplan
 terraform apply tfplan
@@ -137,9 +163,10 @@ Registry, Cloud SQL (private IP, backed up), and the WIF pool + scoped
 service account.
 
 ### Step 6 — Load the database schema
-```bash
-gcloud sql connect $(terraform output -raw cloudsql_connection_name | cut -d: -f3) \
-  --user=devpulse --database=devpulse < ../../../app/init.sql
+```powershell
+$connName = terraform output -raw cloudsql_connection_name
+$instance = ($connName -split ":")[2]
+Get-Content ..\..\..\app\init.sql | gcloud sql connect $instance --user=devpulse --database=devpulse
 ```
 (Password is in Secret Manager, under the secret name from `terraform output`.)
 
@@ -157,51 +184,55 @@ GitHub → Settings → Secrets and variables → Actions → **Variables** tab:
 No `GCP_SA_KEY` secret exists anywhere — that's the point of Step 5's WIF setup.
 
 ### Step 8 — Push to trigger CI
-```bash
-git add . && git commit -m "initial commit" && git push origin main
+```powershell
+git add .
+git commit -m "initial commit"
+git push origin main
 ```
 Watch the **Actions** tab: lint → CodeQL → `pip-audit` → gitleaks →
 `trivy config` → Docker build → Trivy image scan → push to Artifact
-Registry. Any HIGH/CRITICAL finding blocks the pipeline before it reaches
-the cluster.
+Registry.
 
 ### Step 9 — Bootstrap the cluster namespace and secret (once)
-```bash
+```powershell
 kubectl create namespace devpulse-dev
-kubectl create secret generic db-credentials -n devpulse-dev \
-  --from-literal=DB_HOST=$(terraform output -raw cloudsql_private_ip) \
-  --from-literal=DB_NAME=devpulse \
-  --from-literal=DB_USER=devpulse \
-  --from-literal=DB_PASS=$(gcloud secrets versions access latest --secret=devpulse-db-password)
+
+$dbIp = terraform output -raw cloudsql_private_ip
+$dbPass = gcloud secrets versions access latest --secret=devpulse-db-password
+
+kubectl create secret generic db-credentials -n devpulse-dev `
+  --from-literal=DB_HOST=$dbIp `
+  --from-literal=DB_NAME=devpulse `
+  --from-literal=DB_USER=devpulse `
+  --from-literal=DB_PASS=$dbPass
 ```
-(A follow-on improvement is to replace this manual step with the External
-Secrets Operator syncing straight from Secret Manager.)
 
 ### Step 10 — CD deploys automatically
 On a successful CI run on `main`, `cd.yml` authenticates via the same WIF
 identity, fetches GKE credentials, and runs `kubectl apply -k k8s/overlays/dev`.
+Nothing to run locally for this step.
 
 ### Step 11 — Verify
-```bash
+```powershell
 kubectl get pods -n devpulse-dev
 kubectl get svc -n devpulse-dev
 kubectl get hpa -n devpulse-dev
 ```
 
 ### Step 12 — Install monitoring
-```bash
+```powershell
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm repo update
-helm install prometheus prometheus-community/kube-prometheus-stack \
+helm install prometheus prometheus-community/kube-prometheus-stack `
   -n monitoring --create-namespace -f monitoring/prometheus-values.yaml
 
 kubectl apply -f monitoring/servicemonitor.yaml
 kubectl apply -f monitoring/alert-rules.yaml
 ```
 Access Grafana:
-```bash
+```powershell
 kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
-# http://localhost:3000 — admin / (password from prometheus-values.yaml)
+# open http://localhost:3000 — admin / (password from prometheus-values.yaml)
 ```
 Build one panel on `devpulse_target_up` and one on
 `devpulse_target_latency_seconds` — that's the whole point of the tool,
@@ -212,7 +243,7 @@ Install `ingress-nginx` and `cert-manager` via Helm, point DNS at the
 ingress IP, then edit the hostname in `k8s/base/ingress.yaml`.
 
 ### Step 14 — Prove the rollback path
-```bash
+```powershell
 kubectl rollout undo deployment/devpulse -n devpulse-dev
 kubectl rollout status deployment/devpulse -n devpulse-dev
 ```
@@ -224,10 +255,11 @@ Do this once, deliberately, so it's tested — not assumed.
 
 | Component | Pinned to | Why |
 |---|---|---|
-| Python | `3.14` | Matches local dev version; `psycopg2-binary` ships prebuilt wheels for it. |
+| Python | `3.14` | Matches local dev version. |
+| `psycopg2-binary` | `2.9.12` | `2.9.9` has no Python 3.14 wheel — this is the one that actually breaks the build if left unpinned upward. |
 | `hashicorp/google` provider | `~> 8.0` | Current major — has breaking changes vs older v5 pins, review before applying to existing state. |
 | Cloud SQL | `POSTGRES_17` | Latest GA on Cloud SQL at time of writing. |
-| `actions/checkout` / `setup-python` | `@v7` / `@v6` | Older majors stopped working once GitHub removed Node 20 runners (Sept 16, 2026) — not optional. |
+| `actions/checkout` / `setup-python` | `@v7` / `@v6` | Older majors stopped working once GitHub removed Node 20 runners (Sept 16, 2026). |
 | `google-github-actions/*` | `@v3` | Current major, Node 24-compatible. |
 | `github/codeql-action` | `@v4` | Current major. |
 | `gitleaks/gitleaks-action` | `@v3` | v2 is dead post-Node-20 removal. |
