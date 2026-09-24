@@ -1,21 +1,29 @@
 variable "project_name" {
   type = string
 }
+
 variable "region" {
   type = string
 }
+
 variable "network_id" {
   type = string
 }
+
 variable "tier" {
-  type    = string
-  default = "db-custom-1-3840"
+  description = "Cloud SQL Enterprise machine type for the demo"
+  type        = string
+  default     = "db-custom-2-7680"
 }
+
 variable "availability_type" {
-  type    = string
-  default = "ZONAL"
+  description = "Cloud SQL availability"
+  type        = string
+  default     = "ZONAL"
 }
+
 variable "deletion_protection" {
-  type    = bool
-  default = true
+  description = "Prevent accidental deletion"
+  type        = bool
+  default     = false
 }

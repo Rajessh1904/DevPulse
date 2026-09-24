@@ -131,6 +131,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DevPulse", description="Self-hosted uptime monitoring API", lifespan=lifespan)
 
+
 @app.get("/")
 def root():
     # Bare "/" has no natural meaning for an API-only service -- without

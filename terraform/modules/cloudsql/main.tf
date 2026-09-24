@@ -4,7 +4,9 @@ resource "google_sql_database_instance" "postgres" {
   region           = var.region
 
   settings {
-    tier = var.tier
+    tier              = var.tier
+    edition           = "ENTERPRISE"
+    availability_type = var.availability_type
 
     ip_configuration {
       ipv4_enabled    = false
@@ -16,8 +18,6 @@ resource "google_sql_database_instance" "postgres" {
       point_in_time_recovery_enabled = true
       start_time                     = "02:00"
     }
-
-    availability_type = var.availability_type
   }
 
   deletion_protection = var.deletion_protection
@@ -41,6 +41,7 @@ resource "google_sql_user" "app_user" {
 
 resource "google_secret_manager_secret" "db_password" {
   secret_id = "${var.project_name}-db-password"
+
   replication {
     auto {}
   }
