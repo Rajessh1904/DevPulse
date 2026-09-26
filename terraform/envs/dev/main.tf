@@ -11,12 +11,13 @@ module "artifact_registry" {
 }
 
 module "gke" {
-  source       = "../../modules/gke"
-  project_id   = var.project_id
-  project_name = var.project_name
-  region       = var.region
-  network_id   = module.vpc.network_id
-  subnet_id    = module.vpc.subnet_id
+  source                 = "../../modules/gke"
+  project_id             = var.project_id
+  project_name           = var.project_name
+  region                 = var.region
+  network_id             = module.vpc.network_id
+  subnet_id              = module.vpc.subnet_id
+  master_authorized_cidr = var.master_authorized_cidr
 }
 
 module "cloudsql" {
