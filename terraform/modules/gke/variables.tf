@@ -13,3 +13,7 @@ variable "network_id" {
 variable "subnet_id" {
   type = string
 }
+variable "master_authorized_cidr" {
+  description = "CIDR range allowed to access the GKE control plane"
+  type        = string
+}
